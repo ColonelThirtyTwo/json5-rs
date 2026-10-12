@@ -47,15 +47,66 @@ pub fn to_writer<T: Serialize, W: Write>(w: W, value: &T) -> Result<()> {
     value.serialize(&mut Serializer::new(w))
 }
 
+/// What quotes the serializer should use for strings and field names
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum QuoteStyle {
+    #[default]
+    /// Pick either single or double quotes, depending on which needs less escaping
+    Auto,
+    /// Use single quotes (`'string'`)
+    Single,
+    /// Use double quotes (`"string"`)
+    Double,
+}
+impl QuoteStyle {
+    fn delimiter_for_char(self, ch: char) -> char {
+        match self {
+            Self::Auto if ch == '"' => '\'',
+            Self::Double | Self::Auto => '"',
+            Self::Single => '\'',
+        }
+    }
+
+    fn delimiter_for_str(self, str: &str) -> char {
+        match self {
+            Self::Auto if str.contains('"') && !str.contains('\'') => '\'',
+            Self::Double | Self::Auto => '"',
+            Self::Single => '\'',
+        }
+    }
+}
+
+/// Serialization options
+#[derive(Debug, Default, Clone)]
+pub struct SerializerOptions {
+    quote_style: QuoteStyle,
+}
+impl SerializerOptions {
+    /// Set whether to use single or double quotes for emitted strings and field names.
+    pub fn with_quote_style(mut self, quote_style: QuoteStyle) -> Self {
+        self.quote_style = quote_style;
+        self
+    }
+}
+
 /// A serializer that knows how to serialize types implementing [`Serialize`] as JSON5.
 pub struct Serializer<W: Write> {
     w: W,
     depth: usize,
+    opts: SerializerOptions,
 }
 
 impl<W: Write> Serializer<W> {
     pub fn new(w: W) -> Self {
-        Self { w, depth: 0 }
+        Self::with_options(w, Default::default())
+    }
+
+    pub fn with_options(w: W, options: SerializerOptions) -> Self {
+        Self {
+            w,
+            depth: 0,
+            opts: options,
+        }
     }
 }
 
@@ -108,22 +159,17 @@ impl<'a, W: Write> serde::ser::Serializer for &'a mut Serializer<W> {
     serialize_float!(serialize_f64, f64);
 
     fn serialize_char(self, v: char) -> Result<Self::Ok> {
-        if v == '"' {
-            write!(self.w, r#"'"'"#)
-        } else if let Some(escaped) = crate::char::escape('"', v) {
-            write!(self.w, r#""{escaped}""#)
+        let delimiter = self.opts.quote_style.delimiter_for_char(v);
+        if let Some(escaped) = crate::char::escape(delimiter, v) {
+            write!(self.w, r"{delimiter}{escaped}{delimiter}")
         } else {
-            write!(self.w, r#""{v}""#)
+            write!(self.w, r"{delimiter}{v}{delimiter}")
         }
         .map_err(Into::into)
     }
 
     fn serialize_str(self, v: &str) -> Result<Self::Ok> {
-        let delimiter = if v.contains('"') && !v.contains('\'') {
-            '\''
-        } else {
-            '"'
-        };
+        let delimiter = self.opts.quote_style.delimiter_for_str(v);
         write!(self.w, "{delimiter}")?;
         for c in v.chars() {
             match crate::char::escape(delimiter, c) {
@@ -136,11 +182,12 @@ impl<'a, W: Write> serde::ser::Serializer for &'a mut Serializer<W> {
     }
 
     fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok> {
-        write!(self.w, "\"")?;
+        let delimiter = self.opts.quote_style.delimiter_for_str("");
+        write!(self.w, "{delimiter}")?;
         for b in v {
             write!(self.w, "{b:02x}")?;
         }
-        write!(self.w, "\"")?;
+        write!(self.w, "{delimiter}")?;
         Ok(())
     }
 

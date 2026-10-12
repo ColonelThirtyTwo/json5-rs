@@ -123,4 +123,4 @@ mod unicode;
 
 pub use de::{Deserializer, from_str};
 pub use error::{Error, ErrorCode, Position};
-pub use ser::{Serializer, to_string, to_writer};
+pub use ser::{QuoteStyle, Serializer, SerializerOptions, to_string, to_writer};

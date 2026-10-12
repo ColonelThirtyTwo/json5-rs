@@ -1,7 +1,16 @@
 use indexmap::IndexMap;
-use json5::{Error, ErrorCode, to_string};
+use json5::{Error, ErrorCode, Serializer, SerializerOptions, to_string};
 use serde_bytes::{ByteBuf, Bytes};
 use serde_derive::Serialize;
+
+fn to_string_with_opts<T: serde::ser::Serialize>(
+    v: &T,
+    opts: SerializerOptions,
+) -> Result<String, Error> {
+    let mut out = Vec::new();
+    v.serialize(&mut Serializer::with_options(&mut out, opts))
+        .map(|()| String::from_utf8(out).unwrap())
+}
 
 // https://spec.json5.org/#values
 #[test]
@@ -57,6 +66,54 @@ fn serialize_string() {
     assert_eq!(
         to_string(&"escapes: \\, \n, \r, \u{2028}, \u{2029}"),
         Ok(r#""escapes: \\, \n, \r, \u2028, \u2029""#.to_owned())
+    );
+}
+#[test]
+fn serialize_string_double_quote() {
+    let opts = SerializerOptions::default().with_quote_style(json5::QuoteStyle::Double);
+    assert_eq!(
+        to_string_with_opts(&"foo", opts.clone()),
+        Ok(r#""foo""#.to_owned())
+    );
+    assert_eq!(
+        to_string_with_opts(&r#"double: ""#, opts.clone()),
+        Ok(r#""double: \"""#.to_owned())
+    );
+    assert_eq!(
+        to_string_with_opts(&r"single: '", opts.clone()),
+        Ok(r#""single: '""#.to_owned())
+    );
+    assert_eq!(
+        to_string_with_opts(&r#"double: ", single: '"#, opts.clone()),
+        Ok(r#""double: \", single: '""#.to_owned())
+    );
+    assert_eq!(
+        to_string_with_opts(&"escapes: \\, \n, \r, \u{2028}, \u{2029}", opts.clone()),
+        Ok(r#""escapes: \\, \n, \r, \u2028, \u2029""#.to_owned())
+    );
+}
+#[test]
+fn serialize_string_single_quote() {
+    let opts = SerializerOptions::default().with_quote_style(json5::QuoteStyle::Single);
+    assert_eq!(
+        to_string_with_opts(&"foo", opts.clone()),
+        Ok(r#"'foo'"#.to_owned())
+    );
+    assert_eq!(
+        to_string_with_opts(&r#"double: ""#, opts.clone()),
+        Ok(r#"'double: "'"#.to_owned())
+    );
+    assert_eq!(
+        to_string_with_opts(&r"single: '", opts.clone()),
+        Ok(r#"'single: \''"#.to_owned())
+    );
+    assert_eq!(
+        to_string_with_opts(&r#"double: ", single: '"#, opts.clone()),
+        Ok(r#"'double: ", single: \''"#.to_owned())
+    );
+    assert_eq!(
+        to_string_with_opts(&"escapes: \\, \n, \r, \u{2028}, \u{2029}", opts.clone()),
+        Ok(r#"'escapes: \\, \n, \r, \u2028, \u2029'"#.to_owned())
     );
 }
 
