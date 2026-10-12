@@ -76,15 +76,56 @@ impl QuoteStyle {
     }
 }
 
+/// Formatting of output
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutputFormatting {
+    /// Readable format with indentation, newlines, and trailing commas
+    #[default]
+    Pretty,
+    /// Compact format without indentation, newlines, or trailing commas
+    Compact,
+}
+impl OutputFormatting {
+    fn write_newline_and_indent(self, out: &mut impl Write, depth: usize) -> Result<()> {
+        match self {
+            Self::Pretty => {
+                write!(out, "\n{:indent$}", "", indent = depth * 2)?;
+                Ok(())
+            }
+            Self::Compact => Ok(()),
+        }
+    }
+
+    fn field_separator(self) -> &'static str {
+        match self {
+            Self::Compact => "",
+            Self::Pretty => " ",
+        }
+    }
+
+    fn trailing_comma(self) -> &'static str {
+        match self {
+            Self::Compact => "",
+            Self::Pretty => ",",
+        }
+    }
+}
+
 /// Serialization options
 #[derive(Debug, Default, Clone)]
 pub struct SerializerOptions {
     quote_style: QuoteStyle,
+    formatting: OutputFormatting,
 }
 impl SerializerOptions {
     /// Set whether to use single or double quotes for emitted strings and field names.
     pub fn with_quote_style(mut self, quote_style: QuoteStyle) -> Self {
         self.quote_style = quote_style;
+        self
+    }
+
+    pub fn with_formatting(mut self, formatting: OutputFormatting) -> Self {
+        self.formatting = formatting;
         self
     }
 }
@@ -107,6 +148,12 @@ impl<W: Write> Serializer<W> {
             depth: 0,
             opts: options,
         }
+    }
+
+    fn write_newline_and_indent(&mut self) -> Result<()> {
+        self.opts
+            .formatting
+            .write_newline_and_indent(&mut self.w, self.depth)
     }
 }
 
@@ -238,12 +285,14 @@ impl<'a, W: Write> serde::ser::Serializer for &'a mut Serializer<W> {
     {
         write!(self.w, "{{")?;
         self.depth += 1;
-        write!(self.w, "\n{:indent$}", "", indent = self.depth * 2)?;
+        self.write_newline_and_indent()?;
         MapKey::new(self).serialize_str(variant)?;
-        write!(self.w, ": ")?;
+        write!(self.w, ":{}", self.opts.formatting.field_separator())?;
         v.serialize(&mut *self)?;
         self.depth -= 1;
-        write!(self.w, ",\n{:indent$}}}", "", indent = self.depth * 2)?;
+        write!(self.w, "{}", self.opts.formatting.trailing_comma())?;
+        self.write_newline_and_indent()?;
+        write!(self.w, "}}")?;
         Ok(())
     }
 
@@ -274,9 +323,9 @@ impl<'a, W: Write> serde::ser::Serializer for &'a mut Serializer<W> {
     ) -> Result<Self::SerializeTupleVariant> {
         write!(self.w, "{{")?;
         self.depth += 1;
-        write!(self.w, "\n{:indent$}", "", indent = self.depth * 2)?;
+        self.write_newline_and_indent()?;
         MapKey::new(self).serialize_str(variant)?;
-        write!(self.w, ": ")?;
+        write!(self.w, ":{}", self.opts.formatting.field_separator())?;
         self.serialize_seq(Some(len))
     }
 
@@ -299,9 +348,9 @@ impl<'a, W: Write> serde::ser::Serializer for &'a mut Serializer<W> {
     ) -> Result<Self::SerializeStructVariant> {
         write!(self.w, "{{")?;
         self.depth += 1;
-        write!(self.w, "\n{:indent$}", "", indent = self.depth * 2)?;
+        self.write_newline_and_indent()?;
         MapKey::new(self).serialize_str(variant)?;
-        write!(self.w, ": ")?;
+        write!(self.w, ":{}", self.opts.formatting.field_separator())?;
         self.serialize_map(Some(len))
     }
 }
@@ -318,16 +367,11 @@ impl<'a, W: Write> SerializeCollection<'a, W> {
 
     fn close(&mut self, delimiter: char) -> Result<()> {
         self.ser.depth -= 1;
-        if self.empty {
-            write!(self.ser.w, "{delimiter}")?;
-        } else {
-            write!(
-                self.ser.w,
-                "\n{:indent$}{delimiter}",
-                "",
-                indent = self.ser.depth * 2
-            )?;
+        if !self.empty {
+            write!(self.ser.w, "{}", self.ser.opts.formatting.trailing_comma())?;
+            self.ser.write_newline_and_indent()?;
         }
+        write!(self.ser.w, "{delimiter}")?;
         Ok(())
     }
 }
@@ -340,10 +384,15 @@ impl<W: Write> serde::ser::SerializeSeq for SerializeCollection<'_, W> {
     where
         T: ?Sized + Serialize,
     {
+        if !self.empty {
+            write!(self.ser.w, ",")?;
+        }
         self.empty = false;
-        write!(self.ser.w, "\n{:indent$}", "", indent = self.ser.depth * 2)?;
+        self.ser
+            .opts
+            .formatting
+            .write_newline_and_indent(&mut self.ser.w, self.ser.depth)?;
         value.serialize(&mut *self.ser)?;
-        write!(self.ser.w, ",")?;
         Ok(())
     }
 
@@ -398,12 +447,9 @@ impl<W: Write> serde::ser::SerializeTupleVariant for SerializeCollection<'_, W> 
     fn end(mut self) -> Result<Self::Ok> {
         self.close(']')?;
         self.ser.depth -= 1;
-        write!(
-            self.ser.w,
-            ",\n{:indent$}}}",
-            "",
-            indent = self.ser.depth * 2
-        )?;
+        write!(self.ser.w, "{}", self.ser.opts.formatting.trailing_comma())?;
+        self.ser.write_newline_and_indent()?;
+        write!(self.ser.w, "}}")?;
         Ok(())
     }
 }
@@ -416,10 +462,17 @@ impl<W: Write> serde::ser::SerializeMap for SerializeCollection<'_, W> {
     where
         T: ?Sized + Serialize,
     {
+        if !self.empty {
+            write!(self.ser.w, ",")?;
+        }
         self.empty = false;
-        write!(self.ser.w, "\n{:indent$}", "", indent = self.ser.depth * 2)?;
+        self.ser.write_newline_and_indent()?;
         key.serialize(MapKey::new(self.ser))?;
-        write!(self.ser.w, ": ")?;
+        write!(
+            self.ser.w,
+            ":{}",
+            self.ser.opts.formatting.field_separator()
+        )?;
         Ok(())
     }
 
@@ -428,7 +481,6 @@ impl<W: Write> serde::ser::SerializeMap for SerializeCollection<'_, W> {
         T: ?Sized + Serialize,
     {
         value.serialize(&mut *self.ser)?;
-        write!(self.ser.w, ",")?;
         Ok(())
     }
 
@@ -467,12 +519,9 @@ impl<W: Write> serde::ser::SerializeStructVariant for SerializeCollection<'_, W>
     fn end(mut self) -> Result<Self::Ok> {
         self.close('}')?;
         self.ser.depth -= 1;
-        write!(
-            self.ser.w,
-            ",\n{:indent$}}}",
-            "",
-            indent = self.ser.depth * 2
-        )?;
+        write!(self.ser.w, "{}", self.ser.opts.formatting.trailing_comma())?;
+        self.ser.write_newline_and_indent()?;
+        write!(self.ser.w, "}}")?;
         Ok(())
     }
 }

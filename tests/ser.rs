@@ -12,6 +12,13 @@ fn to_string_with_opts<T: serde::ser::Serialize>(
         .map(|()| String::from_utf8(out).unwrap())
 }
 
+fn to_compact_str<T: serde::ser::Serialize>(v: &T) -> Result<String, Error> {
+    to_string_with_opts(
+        v,
+        SerializerOptions::default().with_formatting(json5::OutputFormatting::Compact),
+    )
+}
+
 // https://spec.json5.org/#values
 #[test]
 fn serialize_null() {
@@ -150,6 +157,19 @@ fn serialize_array() {
         Ok("[\n  1,\n  true,\n  \"three\",\n]".to_owned())
     );
 }
+#[test]
+fn serialize_array_compact() {
+    assert_eq!(to_compact_str::<[i32; 0]>(&[]), Ok("[]".to_owned()));
+    assert_eq!(to_compact_str(&[0, 1, 2]), Ok("[0,1,2]".to_owned()));
+    assert_eq!(
+        to_compact_str(&vec![vec![0], vec![1, 2]]),
+        Ok("[[0],[1,2]]".to_owned())
+    );
+    assert_eq!(
+        to_compact_str(&(1, true, "three")),
+        Ok("[1,true,\"three\"]".to_owned())
+    );
+}
 
 // https://spec.json5.org/#objects
 #[test]
@@ -214,6 +234,68 @@ fn serialize_object() {
         Err(Error::new(ErrorCode::InvalidKey)),
     );
 }
+#[test]
+fn serialize_object_compact() {
+    #[derive(PartialEq, Eq, Hash, Serialize)]
+    enum E {
+        A,
+        B,
+        C(()),
+    }
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    struct Image<'a> {
+        width: usize,
+        height: usize,
+        aspect_ratio: &'a str,
+    }
+
+    assert_eq!(
+        to_compact_str::<IndexMap<&str, i32>>(&IndexMap::new()),
+        Ok("{}".to_owned())
+    );
+    assert_eq!(
+        to_compact_str(&IndexMap::from([("foo", 0), ("bar", 1), ("a b", 3)])),
+        Ok("{foo:0,bar:1,\"a b\":3}".to_owned())
+    );
+    assert_eq!(
+        to_compact_str(&IndexMap::from([(ByteBuf::from("JSON5"), 0)])),
+        Ok("{\"4a534f4e35\":0}".to_owned())
+    );
+    assert_eq!(
+        to_compact_str(&IndexMap::from([(true, "yes"), (false, "no")])),
+        Ok("{true:\"yes\",false:\"no\"}".to_owned())
+    );
+    assert_eq!(
+        to_compact_str(&IndexMap::from([
+            ('τ', std::f64::consts::TAU),
+            ('∞', f64::INFINITY),
+        ])),
+        Ok("{τ:6.283185307179586,\"∞\":Infinity}".to_owned())
+    );
+    assert_eq!(
+        to_compact_str(&IndexMap::from([(E::A, 'a'), (E::B, 'b'),])),
+        Ok("{A:\"a\",B:\"b\"}".to_owned())
+    );
+    assert_eq!(
+        to_compact_str(&Image {
+            width: 1920,
+            height: 1080,
+            aspect_ratio: "16:9",
+        }),
+        Ok("{width:1920,height:1080,\"aspect-ratio\":\"16:9\"}".to_owned())
+    );
+    assert_eq!(
+        to_compact_str(&IndexMap::from([(0, "zero"), (1, "one")])),
+        Ok("{\"0\":\"zero\",\"1\":\"one\"}".to_owned())
+    );
+
+    assert_eq!(
+        to_compact_str(&IndexMap::from([(E::A, 'a'), (E::B, 'b'), (E::C(()), 'c')])),
+        Err(Error::new(ErrorCode::InvalidKey)),
+    );
+}
 
 #[test]
 fn serialize_option() {
@@ -264,6 +346,46 @@ fn serialize_structs_and_enums() {
     );
     assert_eq!(to_string(&E::Y(0)), Ok("{\n  Y: 0,\n}".to_owned()));
     assert_eq!(to_string(&E::Z), Ok("\"Z\"".to_owned()));
+}
+#[test]
+fn serialize_structs_and_enums_compact() {
+    #[derive(Serialize)]
+    struct W {
+        a: i32,
+        b: i32,
+    }
+
+    #[derive(Serialize)]
+    struct X(i32, i32);
+
+    #[derive(Serialize)]
+    struct Y(i32);
+
+    #[derive(Serialize)]
+    struct Z;
+
+    #[derive(Serialize)]
+    enum E {
+        W { a: i32, b: i32 },
+        X(i32, i32),
+        Y(i32),
+        Z,
+    }
+
+    assert_eq!(
+        to_compact_str(&W { a: 0, b: 0 }),
+        Ok("{a:0,b:0}".to_owned())
+    );
+    assert_eq!(to_compact_str(&X(0, 0)), Ok("[0,0]".to_owned()));
+    assert_eq!(to_compact_str(&Y(0)), Ok("0".to_owned()));
+    assert_eq!(to_compact_str(&Z), Ok("null".to_owned()));
+    assert_eq!(
+        to_compact_str(&E::W { a: 0, b: 0 }),
+        Ok("{W:{a:0,b:0}}".to_owned())
+    );
+    assert_eq!(to_compact_str(&E::X(0, 0)), Ok("{X:[0,0]}".to_owned()));
+    assert_eq!(to_compact_str(&E::Y(0)), Ok("{Y:0}".to_owned()));
+    assert_eq!(to_compact_str(&E::Z), Ok("\"Z\"".to_owned()));
 }
 
 #[test]
